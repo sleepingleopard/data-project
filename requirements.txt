@@ -1,8 +1,11 @@
-# py -m pip install -r requirements.txt
+# pip install -r requirements.txt
+datetime
+gensim
+lda2vec
+matplotlib
+nltk
 numpy
 pandas
 scikit-learn
-nltk 
-pyspellchecker
-re
-datetime
+spellchecker
+tensorflow

@@ -1,23 +1,29 @@
-import pandas as pd
-import numpy as np
-import sklearn as sk
+import matplotlib.pyplot as plt
 import nltk
-from nltk.corpus import stopwords
-from nltk.stem import WordNetLemmatizer
-from nltk.stem import PorterStemmer
+import numpy as np
+import pandas as pd
 import re
-import unicodedata
 import string
 from datetime import datetime
-from spellchecker import SpellChecker
+from gensim.models import Word2Vec
+from nltk.corpus import stopwords
+from nltk.stem import PorterStemmer
+from nltk.stem import WordNetLemmatizer
+from sklearn.cluster import KMeans
 from sklearn.decomposition import LatentDirichletAllocation
+from sklearn.decomposition import PCA
 from sklearn.decomposition import TruncatedSVD
-from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics import pairwise_distances
+from spellchecker import SpellChecker
 
 
-# TODOS:
-# LSA fixen
+
+
+#########################################################################################
+####  INPUT  ############################################################################
+#########################################################################################
 
 # Read the CSV file
 def read_file(file_path='./archive/reddit_opinion_climate_change.csv'):
@@ -43,6 +49,13 @@ def preprocessing(raw_comments, method='lemmatization'):
 
     prep_comments = np.vectorize(remove_urls)(prep_comments)
     
+    # remove emails
+    def remove_emails(text):
+        email_pattern = re.compile(r'\S+@\S+')
+        return email_pattern.sub(r'', text)
+
+    prep_comments = np.vectorize(remove_emails)(prep_comments)
+    
     # apply a translation table which removes all punctuation
     punctuation_table = str.maketrans('', '', string.punctuation)
     prep_comments = np.char.translate(prep_comments, punctuation_table)
@@ -59,26 +72,24 @@ def preprocessing(raw_comments, method='lemmatization'):
         prep_comments[i] = [word for word in prep_comments[i] if word not in stop_words and len(word) > 2]
     prep_comments = [' '.join(comment) for comment in prep_comments]
 
-    # remove numbers
-    prep_comments = [re.sub(r'\d+', '', comment) for comment in prep_comments]
-    # CO2 will remain as co
-
+    # remove special characters
+    prep_comments = [re.sub(r'[^a-zA-Z\s]', '', comment) for comment in prep_comments]
+    
     # remove extra whitespace
     prep_comments = [re.sub(' +', ' ', comment) for comment in prep_comments]
-
-    # remove accents
-    prep_comments = [unicodedata.normalize('NFKD', comment).encode('ASCII', 'ignore').decode('utf-8', 'ignore') for comment in prep_comments]
     
 
     """
     # spell checking is not used, since it takes too long and does not improve the results significantly
+    
     spell = SpellChecker(language='en')
-    test_comments = prep_comments[1000:1010]
-    test_comments = np.char.split(test_comments)
-    for i in range(len(test_comments)):
-        test_comments[i] = [spell.correction(word) if spell.correction(word) is not None else '' for word in test_comments[i]]
-    test_comments = [' '.join(comment) for comment in test_comments]
+    comments = prep_comments
+    comments = np.char.split(comments)
+    for i in range(len(comments)):
+        comments[i] = [spell.correction(word) if spell.correction(word) is not None else '' for word in comments[i]]
+    comments = [' '.join(comment) for comment in comments]
     """
+        
         
     # lemmatization OR stemming
     if method == 'lemmatization':
@@ -97,7 +108,7 @@ def preprocessing(raw_comments, method='lemmatization'):
             prep_comments[i] = [stemmer.stem(word) for word in prep_comments[i]]
         prep_comments = [' '.join(comment) for comment in prep_comments]
     
-    # remove duplicate comments, which are for example copied through social media answer chains 
+    # remove duplicate comments, which are e.g. copied through social media answer chains 
     seen = set()
     prep_comments = [comment for comment in prep_comments if not (comment in seen or seen.add(comment))]
     
@@ -137,6 +148,26 @@ def perform_tfidf(data):
     return tfidf, terms_tfidf
 
 
+### Word2Vec with gensim
+
+def perform_word2vec(data, min_count=1, size=100, window=5):
+    """
+    :param data: list of tokenized texts (a list of lists of words)
+    :param min_count: minimum number of occurrences of a word to be included in the model
+    :param size: number of dimensions of the embedding vector --> size of hidden layer, higher value = higher accuracy but higher computational cost
+    :param window: maximum distance between the current and predicted word within a sentence.
+    :return: The trained Word2Vec model.
+    """
+    # Prepare data for Word2Vec (tokenization)
+    data = [comment.split() for comment in data]
+
+    # Train Word2Vec model
+    w2v_model = Word2Vec(data, min_count=min_count, vector_size=size, window=window)
+
+    return w2v_model
+
+
+
 #########################################################################################
 ####  THEMATIC ANALYSIS  ################################################################
 #########################################################################################
@@ -159,9 +190,9 @@ def perform_lsa(terms, matrix, themes):
     print("LSA Results: \n \n")
     
     now = datetime.now()
-    now_str = now.strftime("%Y%m%d_%H%M%S")
+    now_str = now.strftime("%Y%m%d_%H%M")
     filename = f'./results/lsa_results_{now_str}.csv'
-    with open({filename}, 'w') as f:
+    with open(filename, 'w') as f:
         for i, comp in enumerate(lsa.components_):
             terms_comp = zip(terms, comp)
             sorted_terms = sorted(terms_comp, key= lambda x:x[1], reverse=True)[:10]
@@ -171,7 +202,7 @@ def perform_lsa(terms, matrix, themes):
                 f.write(t[0] + ', ')
             f.write('\n')
             print(" ")
-    print("Results saved in ./results/lsa_results_$timestamp.csv \n \n")
+    print(f'Results saved in {filename} \n \n')
 
 
     
@@ -189,17 +220,61 @@ def perform_lda(terms, matrix, themes):
     print("LDA Results: \n \n")
     
     now = datetime.now()
-    now_str = now.strftime("%Y%m%d_%H%M%S")
+    now_str = now.strftime("%Y%m%d_%H%M")
     filename = f'./results/lda_results_{now_str}.csv'
-    with open({filename}, 'w') as f:
+    with open(filename, 'w') as f:
         for i, topic in enumerate(lda.components_):
             print(f"Top 10 words for topic #{i}:")
             term_list = [terms[i] for i in topic.argsort()[-10:]]
             print(term_list)
             f.write(', '.join(term_list) + "\n")
             print("\n")
-    print("Results saved in ./results/lda_results_$timestamp.csv \n \n")
+    print(f'Results saved in {filename} \n \n')
+
+
+### Clustering with K-Means
+
+def perform_kmeans_clustering(model, themes):
     
+    # K-Means Clustering for themes
+    word_vectors = model.wv.vectors
+    kmeans = KMeans(n_clusters=themes)
+    clusters = kmeans.fit_predict(word_vectors)
+
+    # visualization of clusters
+    # reduce dimensionality of word vectors to 2D for visualization
+    pca = PCA(n_components=2)
+    result = pca.fit_transform(word_vectors)
+    
+    print("K-Means Clustering Results: \n \n")
+    plt.scatter(result[:, 0], result[:, 1], c=clusters)
+    now = datetime.now()
+    now_str = now.strftime("%Y%m%d_%H%M")
+    plot_filename = f'./results/cluster_plot_{now_str}.png'
+    plt.savefig(plot_filename)
+    print(f'Plot saved in {plot_filename} \n \n')
+    
+    # extract the most important words for each cluster and save it as the result
+    filename = f'./results/cluster_results_{now_str}.csv'
+    with open(filename, 'w') as f:
+        for i in range(themes):
+            words_in_cluster = [word for word, cluster in zip(model.wv.index_to_key, clusters) if cluster == i]
+            if len(words_in_cluster) > 10:
+                # get the centroid of the current cluster (the mean of all word vectors in the cluster)
+                centroid = kmeans.cluster_centers_[i]
+                # calculate the distance of each word in the cluster to the centroid
+                distances = pairwise_distances([centroid], model.wv[words_in_cluster])[0]
+                # get the indices of the 5 words that are closest to the centroid
+                top5_indices = np.argsort(distances)[:10]
+                # select only the top 5 words
+                words_in_cluster = [words_in_cluster[index] for index in top5_indices]
+            print(f"Words in topic {i}: {words_in_cluster}")
+            f.write(', '.join(words_in_cluster) + "\n")
+    print(f'Results saved in {filename} \n \n')
+
+
+
+
 #########################################################################################
 ####  MAIN  #############################################################################
 #########################################################################################
@@ -224,8 +299,8 @@ def main():
             print("Example dataset not found. Please use a valid path.")
             main()
 
-    print(raw_comments[900:950])
-
+   
+    
     print("Do you want to use Lemmatization or Stemming for Preprocessing? \n \n 1 = Lemmatization (recommended) \n 2 = Stemming (More context may be lost!) \n")
     try:
         word_preprocess = int(input())
@@ -233,28 +308,30 @@ def main():
         print("Invalid input. Please enter a number.")
         main()
         
-    if vector_method != 1 and vector_method != 2:
+    if word_preprocess != 1 and word_preprocess != 2:
         print("Invalid input. Please enter 1 or 2.")
         main()
     
-    print("Do you want to use Bag of Words or TF-IDF for vectorizing? \n \n 1 = Bag of Words \n 2 = TF-IDF \n")
+    print("Do you want to use Bag of Words, TF-IDF or Word2Vec for vectorizing? \n \n 1 = Bag of Words \n 2 = TF-IDF \n 3 = Word2Vec \n")
     try:
         vector_method = int(input())
     except ValueError:
         print("Invalid input. Please enter a number.")
         main()
     
-        
-    print("Do you want to use LSA or LDA for theme analysis? \n \n 1 = LSA \n 2 = LDA \n")
-    try:
-        analysis_method = int(input())
-    except ValueError:
-        print("Invalid input. Please enter a number.")
-        main()
-        
-    if analysis_method != 1 and analysis_method != 2:
-        print("Invalid input. Please enter 1 or 2.")
-        main()
+    if vector_method != 3: 
+        print("Do you want to use LSA or LDA for theme analysis? \n \n 1 = LSA \n 2 = LDA \n")
+        try:
+            analysis_method = int(input())
+        except ValueError:
+            print("Invalid input. Please enter a number.")
+            main()
+            
+        if analysis_method != 1 and analysis_method != 2:
+            print("Invalid input. Please enter 1 or 2.")
+            main()
+    elif vector_method == 3:
+        analysis_method = 3
     
     print("Please enter the number of themes you want to find: \n \n")
     try:
@@ -265,6 +342,7 @@ def main():
         
 
     print("Your dataset contains "+str(len(raw_comments))+" comments. \n \nPreprocessing...\n \n" )
+    
     try: 
         if word_preprocess == 1:
             prep_comments = preprocessing(raw_comments)
@@ -274,7 +352,6 @@ def main():
         print( "Preprocessing failed. Please try again.")
         main()
     
-    print(prep_comments[900:950])
     
     print("Preprocessing successful. \n \nVectorizing...")
     if vector_method == 1:
@@ -286,6 +363,12 @@ def main():
     elif vector_method == 2:
         try: 
             matrix, terms = perform_tfidf(prep_comments)
+        except:
+            print("Vectorizing with TF-IDF failed. Please try again.")
+            main()
+    elif vector_method == 3:
+        try: 
+            w2v_model = perform_word2vec(prep_comments)
         except:
             print("Vectorizing with TF-IDF failed. Please try again.")
             main()
@@ -303,6 +386,13 @@ def main():
             perform_lda(terms, matrix, themes)
         except:
             print("Analysis with LDA failed. Please try again.")
+            main()
+    elif analysis_method == 3:
+        print("Since you chose Word2Vec for vectorizing, theme analysis is carried out using clustering.  \n \n")
+        try:
+            perform_kmeans_clustering(w2v_model, themes)  
+        except:
+            print("Analysis with Clustering failed. Please try again.")
             main()
     
 
