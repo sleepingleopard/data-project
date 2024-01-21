@@ -409,4 +409,5 @@ def main():
         print("Goodbye!")
 
 # call main function
-main()
+if __name__ == "__main__":
+    main()
