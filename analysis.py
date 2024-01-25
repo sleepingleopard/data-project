@@ -7,18 +7,15 @@ import string
 from datetime import datetime
 from gensim.models import Word2Vec
 from nltk.corpus import stopwords
-from nltk.stem import PorterStemmer
-from nltk.stem import WordNetLemmatizer
+from nltk.stem import PorterStemmer, WordNetLemmatizer
 from sklearn.cluster import KMeans
-from sklearn.decomposition import LatentDirichletAllocation
-from sklearn.decomposition import PCA
-from sklearn.decomposition import TruncatedSVD
-from sklearn.feature_extraction.text import CountVectorizer
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.decomposition import LatentDirichletAllocation, PCA, TruncatedSVD
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 from sklearn.metrics import pairwise_distances
 from spellchecker import SpellChecker
 
-
+### TODO
+# - remove Testing Data
 
 
 #########################################################################################
@@ -63,21 +60,20 @@ def preprocessing(raw_comments, method='lemmatization'):
     # remove line breaks
     prep_comments = np.char.replace(prep_comments, '\n', ' ')
 
-    # remove stop words and words with less than 3 characters
-    nltk.download('stopwords')
-    stop_words = stopwords.words('english')
-    stop_words.extend(['lol', 'yes', 'yep', 'due', 'sure', 'whatever', 'it', 'its', 'say', 'one', 'like', 'really', 'would', 'dont', 'hes', 'thats', 'youre', 'theyre', 'didn', 'wasn', 'wouldn', 'shouldn', 'couldnt', 'cant', 'wont', 'isnt', 'arent', 'didnt', 'doesnt', 'ive', 'youve', 'theyve', 'weve'])
-    prep_comments = np.char.split(prep_comments)
-    for i in range(len(prep_comments)):
-        prep_comments[i] = [word for word in prep_comments[i] if word not in stop_words and len(word) > 2]
-    prep_comments = [' '.join(comment) for comment in prep_comments]
-
     # remove special characters
     prep_comments = [re.sub(r'[^a-zA-Z\s]', '', comment) for comment in prep_comments]
     
     # remove extra whitespace
     prep_comments = [re.sub(' +', ' ', comment) for comment in prep_comments]
     
+    # remove stop words and words with less than 3 characters
+    nltk.download('stopwords')
+    stop_words = stopwords.words('english')
+    stop_words.extend(['ampxb', 'lol', 'yes', 'yep', 'due', 'sure', 'whatever', 'it', 'its', 'say', 'one', 'like', 'really', 'would', 'dont', 'hes', 'thats', 'youre', 'theyre', 'didn', 'wasn', 'wouldn', 'shouldn', 'couldnt', 'cant', 'wont', 'isnt', 'arent', 'didnt', 'doesnt', 'ive', 'youve', 'theyve', 'weve'])
+    prep_comments = np.char.split(prep_comments)
+    for i in range(len(prep_comments)):
+        prep_comments[i] = [word for word in prep_comments[i] if word not in stop_words and len(word) > 2]
+    prep_comments = [' '.join(comment) for comment in prep_comments]
 
     """
     # spell checking is not used, since it takes too long and does not improve the results significantly
@@ -122,9 +118,9 @@ def preprocessing(raw_comments, method='lemmatization'):
 
 ### Bag of Words with sklearn
 
-def perform_bow(data):
+def perform_bow(data, ngram_range=(1,1)):
    
-    vectorizer_bow = CountVectorizer()
+    vectorizer_bow = CountVectorizer(ngram_range=ngram_range)
     bow = vectorizer_bow.fit_transform(data)
     terms_bow = vectorizer_bow.get_feature_names_out()
     # bow is a matrix which has the vocabulary as columns and the comments as rows
@@ -136,9 +132,9 @@ def perform_bow(data):
 
 ### TF-IDF with sklearn
 
-def perform_tfidf(data):
+def perform_tfidf(data, ngram_range=(1,1)):
     
-    vectorizer_tfidf = TfidfVectorizer()
+    vectorizer_tfidf = TfidfVectorizer(ngram_range=ngram_range)
     tfidf = vectorizer_tfidf.fit_transform(data)
     terms_tfidf = vectorizer_tfidf.get_feature_names_out()
     # tfidf is a matrix which has the vocabulary as columns and the comments as rows
@@ -332,7 +328,15 @@ def main():
             main()
     elif vector_method == 3:
         analysis_method = 3
-    
+        
+    if analysis_method != 3:
+        print("What is the size of n-grams you want to use for vectorizing? Beware that n-grams can increase complexity.  \n \n 1 = Unigrams \n 2 = Bigrams \n 3 = Trigrams \n ... \n n = N-Grams \n")
+        try:
+            n_gram_size = int(input())
+        except ValueError:
+            print("Invalid input. Please enter a number.")
+            main()
+            
     print("Please enter the number of themes you want to find: \n \n")
     try:
         themes = int(input())
@@ -343,6 +347,11 @@ def main():
 
     print("Your dataset contains "+str(len(raw_comments))+" comments. \n \nPreprocessing...\n \n" )
     
+    ####
+    # Testing Data
+    raw_comments = raw_comments[800:1000]
+    print(raw_comments)
+    
     try: 
         if word_preprocess == 1:
             prep_comments = preprocessing(raw_comments)
@@ -352,17 +361,18 @@ def main():
         print( "Preprocessing failed. Please try again.")
         main()
     
+    print(prep_comments)
     
     print("Preprocessing successful. \n \nVectorizing...")
     if vector_method == 1:
         try:
-            matrix, terms = perform_bow(prep_comments)
+            matrix, terms = perform_bow(prep_comments, (n_gram_size, n_gram_size))
         except:
             print("Vectorizing with BoW failed. Please try again.")
             main()
     elif vector_method == 2:
         try: 
-            matrix, terms = perform_tfidf(prep_comments)
+            matrix, terms = perform_tfidf(prep_comments, (n_gram_size, n_gram_size))
         except:
             print("Vectorizing with TF-IDF failed. Please try again.")
             main()
