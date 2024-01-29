@@ -1,3 +1,4 @@
+import gensim.corpora as corpora
 import matplotlib.pyplot as plt
 import nltk
 import numpy as np
@@ -5,7 +6,7 @@ import pandas as pd
 import re
 import string
 from datetime import datetime
-from gensim.models import Word2Vec
+from gensim.models import CoherenceModel, Word2Vec
 from nltk.corpus import stopwords
 from nltk.stem import PorterStemmer, WordNetLemmatizer
 from sklearn.cluster import KMeans
@@ -13,9 +14,6 @@ from sklearn.decomposition import LatentDirichletAllocation, PCA, TruncatedSVD
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 from sklearn.metrics import pairwise_distances
 from spellchecker import SpellChecker
-
-### TODO
-# - remove Testing Data
 
 
 #########################################################################################
@@ -188,17 +186,23 @@ def perform_lsa(terms, matrix, themes):
     now = datetime.now()
     now_str = now.strftime("%Y%m%d_%H%M")
     filename = f'./results/lsa_results_{now_str}.csv'
+    topics = []  
     with open(filename, 'w') as f:
         for i, comp in enumerate(lsa.components_):
             terms_comp = zip(terms, comp)
             sorted_terms = sorted(terms_comp, key= lambda x:x[1], reverse=True)[:10]
             print("Top 10 words for topic #"+str(i)+": ")
+            topic_words = []
             for t in sorted_terms:
                 print(t[0])
                 f.write(t[0] + ', ')
+                topic_words.append(t[0])  
+            topics.append(topic_words)  
             f.write('\n')
             print(" ")
     print(f'Results saved in {filename} \n \n')
+    
+    return topics
 
 
     
@@ -218,23 +222,70 @@ def perform_lda(terms, matrix, themes):
     now = datetime.now()
     now_str = now.strftime("%Y%m%d_%H%M")
     filename = f'./results/lda_results_{now_str}.csv'
+    topics = []  
     with open(filename, 'w') as f:
         for i, topic in enumerate(lda.components_):
             print(f"Top 10 words for topic #{i}:")
             term_list = [terms[i] for i in topic.argsort()[-10:]]
             print(term_list)
             f.write(', '.join(term_list) + "\n")
+            topics.append(term_list)  
             print("\n")
     print(f'Results saved in {filename} \n \n')
+    
+    return topics
+
 
 
 ### Clustering with K-Means
 
-def perform_kmeans_clustering(model, themes):
+def calculate_optimal_k(word_vectors, max_k=10):
+    
+    # calculate the optimal number of clusters using the elbow method
+    # SSE = sum of squared errors (the distance of each point to its cluster center)
+    # the optimal number of clusters is the point where the SSE stops decreasing significantly, so that adding another cluster does not improve the model
+    print("Calculating optimal number of clusters using the elbow method... \n")
+    
+    sse = []
+    list_k = list(range(2, max_k+1))
+
+    # for each k, Clustering is performed and the SSE is added to the list
+    for k in list_k:
+        km = KMeans(n_clusters=k, random_state=0)
+        km.fit(word_vectors)
+        sse.append(km.inertia_)
+
+    # comparing the differences between the SSEs of each k to find the elbow point
+    diffs = np.diff(sse)
+    diff_ratios = diffs[:-1] / diffs[1:]
+    k_idx = np.argmax(diff_ratios) + 1
+    optimal_k = list_k[k_idx]
+    
+    # visualization of elbow plot
+    plt.figure(figsize=(6, 6))
+    plt.plot(list_k, sse, '-o')
+    plt.xlabel(r'Number of clusters *k*')
+    plt.ylabel('Sum of squared distance')
+    plt.plot(optimal_k, sse[k_idx], 'ro')  # mark the elbow point
+    plt.text(optimal_k, sse[k_idx], '   Optimal k = '+str(optimal_k))
+    
+    # save elbow plot
+    now = datetime.now()
+    now_str = now.strftime("%Y%m%d_%H%M")
+    plot_elbow_filename = f'./results/elbow_plot_{now_str}.png'
+    plt.savefig(plot_elbow_filename)
+    print(f'Elbow plot saved in {plot_elbow_filename} \n \n The optimal number of clusters is {optimal_k}. \n \n')
+    plt.close()
+    
+    return optimal_k
+
+
+def perform_kmeans_clustering(model, max_themes=10):
     
     # K-Means Clustering for themes
     word_vectors = model.wv.vectors
-    kmeans = KMeans(n_clusters=themes)
+    optimal_k = calculate_optimal_k(word_vectors, max_themes) 
+    kmeans = KMeans(n_clusters=optimal_k) 
     clusters = kmeans.fit_predict(word_vectors)
 
     # visualization of clusters
@@ -242,18 +293,20 @@ def perform_kmeans_clustering(model, themes):
     pca = PCA(n_components=2)
     result = pca.fit_transform(word_vectors)
     
-    print("K-Means Clustering Results: \n \n")
+    print("K-Means Clustering Results: \n ")
     plt.scatter(result[:, 0], result[:, 1], c=clusters)
     now = datetime.now()
     now_str = now.strftime("%Y%m%d_%H%M")
-    plot_filename = f'./results/cluster_plot_{now_str}.png'
-    plt.savefig(plot_filename)
-    print(f'Plot saved in {plot_filename} \n \n')
+    plot_cluster_filename = f'./results/cluster_plot_{now_str}.png'
+    plt.savefig(plot_cluster_filename)
+    print(f'Plot saved in {plot_cluster_filename} \n \n')
+    plt.close()
     
     # extract the most important words for each cluster and save it as the result
     filename = f'./results/cluster_results_{now_str}.csv'
+    topics = [ ]
     with open(filename, 'w') as f:
-        for i in range(themes):
+        for i in range(optimal_k): 
             words_in_cluster = [word for word, cluster in zip(model.wv.index_to_key, clusters) if cluster == i]
             if len(words_in_cluster) > 10:
                 # get the centroid of the current cluster (the mean of all word vectors in the cluster)
@@ -261,12 +314,45 @@ def perform_kmeans_clustering(model, themes):
                 # calculate the distance of each word in the cluster to the centroid
                 distances = pairwise_distances([centroid], model.wv[words_in_cluster])[0]
                 # get the indices of the 5 words that are closest to the centroid
-                top5_indices = np.argsort(distances)[:10]
-                # select only the top 5 words
-                words_in_cluster = [words_in_cluster[index] for index in top5_indices]
+                top_indices = np.argsort(distances)[:10]
+                # select only the top X words
+                words_in_cluster = [words_in_cluster[index] for index in top_indices]
             print(f"Words in topic {i}: {words_in_cluster}")
             f.write(', '.join(words_in_cluster) + "\n")
+            topics.append(words_in_cluster)
     print(f'Results saved in {filename} \n \n')
+    
+    return topics
+
+
+
+### Coherence Score
+
+def get_coherence(topics, prep_comments):
+  
+  # transform comments into list of lists of strings
+  texts = [comment.split() for comment in prep_comments]
+     
+  # format topics to list of list of strings (separate n-grams by comma)
+  split_grams = [[gram.split() for gram in topic] for topic in topics]
+  fmt_topics = [ ]
+  for topic in split_grams:
+    fmt_topic = [ ]
+    for gram in topic:
+      fmt_topic.extend(gram)
+    fmt_topics.append(fmt_topic)
+
+  # create a gensim dictionary from comments
+  dictionary = corpora.Dictionary(texts)
+  
+  # calculate coherence score with gensim model
+  coherence_model = CoherenceModel(topics=fmt_topics, texts=texts, dictionary=dictionary, coherence='c_v')
+  coherence = round(coherence_model.get_coherence(), 4)
+
+  print(f'Coherence Score for resulting themes: {coherence} \n \n')
+
+
+
 
 
 
@@ -295,7 +381,7 @@ def main():
             print("Example dataset not found. Please use a valid path.")
             main()
 
-   
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     
     print("Do you want to use Lemmatization or Stemming for Preprocessing? \n \n 1 = Lemmatization (recommended) \n 2 = Stemming (More context may be lost!) \n")
     try:
@@ -344,13 +430,9 @@ def main():
         print("Invalid input. Please enter a number.")
         main()
         
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
     print("Your dataset contains "+str(len(raw_comments))+" comments. \n \nPreprocessing...\n \n" )
-    
-    ####
-    # Testing Data
-    raw_comments = raw_comments[800:1000]
-    print(raw_comments)
     
     try: 
         if word_preprocess == 1:
@@ -360,8 +442,8 @@ def main():
     except:
         print( "Preprocessing failed. Please try again.")
         main()
-    
-    print(prep_comments)
+        
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     
     print("Preprocessing successful. \n \nVectorizing...")
     if vector_method == 1:
@@ -383,28 +465,33 @@ def main():
             print("Vectorizing with TF-IDF failed. Please try again.")
             main()
     
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
     print("Vectorizing done. \n \nAnalyzing for themes...\n \n" )
     if analysis_method == 1:
         try:
-            perform_lsa(terms, matrix, themes)
+            topics = perform_lsa(terms, matrix, themes)
         except:
             print("Analysis with LSA failed. Please try again.")
             main()
     elif analysis_method == 2:
         try:
-            perform_lda(terms, matrix, themes)
+            topics = perform_lda(terms, matrix, themes, prep_comments)
         except:
             print("Analysis with LDA failed. Please try again.")
             main()
     elif analysis_method == 3:
         print("Since you chose Word2Vec for vectorizing, theme analysis is carried out using clustering.  \n \n")
         try:
-            perform_kmeans_clustering(w2v_model, themes)  
+            topics = perform_kmeans_clustering(w2v_model, themes)  
         except:
             print("Analysis with Clustering failed. Please try again.")
             main()
     
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    
+    print("Theme analysis done. Calculating coherence score for your themes... \n \n")
+    get_coherence(topics, prep_comments)
 
     print("Analysis done. \n \n Do you want to perform another analysis? \n \n 1 = Yes \n 2 = No \n")
     try:
